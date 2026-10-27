@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OldKart Admin</title>
+<style>
+:root{--p:#3b3fd8;--ink:#151826;--bg:#f2f4f7;--mut:#6b7285;--line:#d9dde6}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:900px;margin:auto;padding:14px}
+input,select,button{padding:10px;font-size:15px;border:1px solid var(--line);border-radius:8px;margin:4px 0;background:#fff;color:var(--ink)}
+input,select{width:100%}
+button{background:var(--p);color:#fff;border:0;cursor:pointer;margin-right:6px}
+button.g{background:#fff;color:var(--p);border:1px solid var(--p)}
+.nav{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.nav button{background:#e6e9f0;color:var(--ink)}.nav button.on{background:var(--p);color:#fff}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stats div{background:#fff;padding:16px;border-radius:10px;font-size:14px;color:var(--mut)}
+.stats b{display:block;font-size:30px;color:var(--ink)}
+.c{background:#fff;padding:12px;border-radius:10px;margin:8px 0}
+.im{display:flex;gap:6px;overflow-x:auto}.im img{height:110px;border-radius:8px}
+.bar{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:14px}
+.bar span{width:44px;color:var(--mut)}.bar i{display:block;height:14px;background:var(--p);border-radius:4px;min-width:2px}
+small{color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap" id="root"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, query, where, limit, getCountFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { firebaseConfig } from "./config.js";
+
+const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
+const $ = s => document.querySelector(s), R = $("#root");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const DEF_CATS = ["Mobiles", "Vehicles", "Electronics", "Furniture", "Fashion", "Books", "Others"];
+let V;
+
+function loginView(msg = "") {
+  R.innerHTML = `<h2>OldKart Admin Login</h2><p style="color:red">${esc(msg)}</p>
+  <input id="e" type="email" placeholder="Admin email"><input id="p" type="password" placeholder="Password">
+  <button id="li">Login</button>`;
+  $("#li").onclick = async () => {
+    try { await signInWithEmailAndPassword(auth, $("#e").value, $("#p").value); }
+    catch (e) { loginView("Email ya password galat hai"); }
+  };
+}
+
+onAuthStateChanged(auth, async u => {
+  if (!u) return loginView();
+  const s = await getDoc(doc(db, "users", u.uid));
+  if (!s.exists() || s.data().role !== "admin") { await signOut(auth); return loginView("Ye account admin nahi hai"); }
+  R.innerHTML = `<h2>OldKart Admin</h2><div class="nav" id="nv">
+  <button data-t="dash">📊 Dashboard</button><button data-t="ads">📝 Ads</button>
+  <button data-t="users">👥 Users</button><button data-t="cats">🗂 Categories</button><button class="g" id="lo">Logout</button></div><div id="v"></div>`;
+  V = $("#v");
+  $("#lo").onclick = () => signOut(auth);
+  const tabs = { dash, ads: () => adsTab("pending"), users: usersTab, cats: catsTab };
+  $("#nv").onclick = e => {
+    const t = e.target.dataset.t; if (!t) return;
+    document.querySelectorAll("#nv button").forEach(b => b.classList.toggle("on", b === e.target));
+    tabs[t]();
+  };
+  $("#nv button").click();
+});
+
+async function dash() {
+  V.innerHTML = "Loading...";
+  const cnt = async q => (await getCountFromServer(q)).data().count;
+  const days = [...Array(7)].map((_, i) => new Date(Date.now() - i * 864e5).toISOString().slice(0, 10)).reverse();
+  const [u, a, p, ...d] = await Promise.all([
+    cnt(collection(db, "users")), cnt(collection(db, "ads")),
+    cnt(query(collection(db, "ads"), where("status", "==", "pending"))),
+    ...days.map(x => cnt(query(collection(db, "daily_activity"), where("date", "==", x))))
+  ]);
+  const mx = Math.max(1, ...d);
+  V.innerHTML = `<div class="stats"><div><b>${u}</b>Total users</div><div><b>${a}</b>Total ads</div>
+  <div><b>${p}</b>Pending ads</div><div><b>${d[6]}</b>Aaj ke active users</div></div>
+  <h3>Daily active users (pichhle 7 din)</h3>
+  ${days.map((x, i) => `<div class="bar"><span>${x.slice(5)}</span><i style="width:${d[i] / mx * 70}%"></i> ${d[i]}</div>`).join("")}`;
+}
+
+async function adsTab(st) {
+  V.innerHTML = `<select id="st">${["pending", "approved", "rejected", "sold"].map(x => `<option ${x === st ? "selected" : ""}>${x}</option>`).join("")}</select><div id="al">Loading...</div>`;
+  $("#st").onchange = e => adsTab(e.target.value);
+  const s = await getDocs(query(collection(db, "ads"), where("status", "==", st), limit(100)));
+  $("#al").innerHTML = s.empty ? "<p>Is status mein koi ad nahi</p>" : s.docs.map(d => {
+    const a = d.data();
+    return `<div class="c"><div class="im">${(a.images || []).map(i => `<img src="${i}" alt="">`).join("")}</div>
+    <b>₹${a.price} — ${esc(a.title)}</b><p>${esc(a.description)}</p>
+    <small>${esc(a.category)} • ${esc(a.city)} • Seller: ${esc(a.sellerName)}</small><div style="margin-top:8px">
+    ${st !== "approved" ? `<button data-ap="${d.id}">✅ Approve</button>` : ""}
+    ${st !== "rejected" ? `<button class="g" data-rj="${d.id}">❌ Reject</button>` : ""}
+    <button class="g" data-dl="${d.id}">🗑 Delete</button></div></div>`;
+  }).join("");
+  $("#al").onclick = async e => {
+    const t = e.target.dataset;
+    if (t.ap) await updateDoc(doc(db, "ads", t.ap), { status: "approved", rejectReason: "" });
+    else if (t.rj) { const r = prompt("Reject karne ka reason?"); if (r === null) return; await updateDoc(doc(db, "ads", t.rj), { status: "rejected", rejectReason: r }); }
+    else if (t.dl) { if (!confirm("Ad delete karein?")) return; await deleteDoc(doc(db, "ads", t.dl)); }
+    else return;
+    adsTab(st);
+  };
+}
+
+async function usersTab() {
+  V.innerHTML = `<input id="uq" placeholder="Naam ya email search karo"><div id="ul">Loading...</div>`;
+  const s = await getDocs(collection(db, "users"));
+  const U = s.docs.map(d => ({ id: d.id, ...d.data() }));
+  const draw = () => {
+    const q = $("#uq").value.toLowerCase();
+    $("#ul").innerHTML = U.filter(u => ((u.name || "") + (u.email || "")).toLowerCase().includes(q)).map(u =>
+      `<div class="c"><b>${esc(u.name)}</b> ${u.role === "admin" ? "(admin)" : ""} ${u.isBlocked ? "🚫" : ""}<br><small>${esc(u.email)}</small><br>
+      ${u.role === "admin" ? "" : `<button data-b="${u.id}">${u.isBlocked ? "✅ Unblock" : "🚫 Block"}</button>`}</div>`).join("");
+  };
+  draw(); $("#uq").oninput = draw;
+  $("#ul").onclick = async e => {
+    const id = e.target.dataset.b; if (!id) return;
+    const u = U.find(x => x.id === id); u.isBlocked = !u.isBlocked;
+    await updateDoc(doc(db, "users", id), { isBlocked: u.isBlocked }); draw();
+  };
+}
+
+async function catsTab() {
+  V.innerHTML = `<input id="cn" placeholder="Nayi category ka naam"><button id="ca">Add category</button>
+  <button class="g" id="cd">Default categories daalo</button><div id="cl">Loading...</div>`;
+  const load = async () => {
+    const s = await getDocs(collection(db, "categories"));
+    $("#cl").innerHTML = s.empty ? "<p><small>Abhi koi category nahi (app default list dikhayegi)</small></p>"
+      : s.docs.map(d => `<div class="c">${esc(d.data().name)} <button class="g" data-d="${d.id}" style="float:right">Delete</button></div>`).join("");
+  };
+  await load();
+  $("#ca").onclick = async () => { const n = $("#cn").value.trim(); if (!n) return; await addDoc(collection(db, "categories"), { name: n }); $("#cn").value = ""; load(); };
+  $("#cd").onclick = async () => { for (const n of DEF_CATS) await addDoc(collection(db, "categories"), { name: n }); load(); };
+  $("#cl").onclick = async e => { const id = e.target.dataset.d; if (id && confirm("Delete karein?")) { await deleteDoc(doc(db, "categories", id)); load(); } };
+}
+</script>
+</body>
+</html>
