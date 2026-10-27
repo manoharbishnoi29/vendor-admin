@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OldKart Admin</title>
+<title>Vendor Admin</title>
 <style>
 :root{--p:#3b3fd8;--ink:#151826;--bg:#f2f4f7;--mut:#6b7285;--line:#d9dde6}
 *{box-sizing:border-box}
@@ -45,7 +45,7 @@ const dt = p => p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString("e
 let V;
 
 function loginView(msg = "") {
-  R.innerHTML = `<h2>OldKart Admin Login</h2><p style="color:red">${esc(msg)}</p>
+  R.innerHTML = `<h2>Vendor Admin Login</h2><p style="color:red">${esc(msg)}</p>
   <input id="e" type="email" placeholder="Admin email"><input id="p" type="password" placeholder="Password">
   <button id="li">Login</button>`;
   $("#li").onclick = async () => {
@@ -58,7 +58,7 @@ onAuthStateChanged(auth, async u => {
   if (!u) return loginView();
   const s = await getDoc(doc(db, "users", u.uid));
   if (!s.exists() || s.data().role !== "admin") { await signOut(auth); return loginView("Ye account admin nahi hai"); }
-  R.innerHTML = `<h2>OldKart Admin</h2><div class="nav" id="nv">
+  R.innerHTML = `<h2>Vendor Admin</h2><div class="nav" id="nv">
   <button data-t="dash">📊 Dashboard</button><button data-t="ads">📝 Ads</button>
   <button data-t="users">👥 Users</button><button data-t="cats">🗂 Categories</button>
   <button data-t="pay">💳 Payments</button><button data-t="earn">💰 Meri Kamai</button>
@@ -72,7 +72,9 @@ onAuthStateChanged(auth, async u => {
     document.querySelectorAll("#nv button").forEach(b => b.classList.toggle("on", b === e.target));
     V.onclick = null; V.innerHTML = "Loading...";
     try { await tabs[t](); }
-    catch (x) { V.innerHTML = `<p style="color:red"><b>Error:</b> ${esc(x.message)}</p><p><small>Zyada chance: Firestore Rules publish nahi hue. Firebase console → Firestore → Rules mein firestore.rules paste karke Publish karo.</small></p>`; }
+    catch (x) { V.innerHTML = `<p style="color:red"><b>Error (${esc(t)}):</b> ${esc(x.message)}</p>
+      <p><small>Ye admin page is Firebase project se juda hai: <b>${esc(firebaseConfig.projectId)}</b><br>Login: <b>${esc(auth.currentUser?.email)}</b></small></p>
+      <p><small>Firebase console mein bilkul yahi project (<b>${esc(firebaseConfig.projectId)}</b>) kholkar Firestore Database → Rules mein firestore.rules paste karo aur Publish dabao.</small></p>`; }
   };
   $("#nv button").click();
 });
@@ -228,7 +230,7 @@ async function chatsTab() {
 /* ---------- settings ---------- */
 async function setTab() {
   const s = await getDoc(doc(db, "settings", "app"));
-  const d = { upiId: "", upiName: "OldKart", razorpayKey: "", commission: 5, ...(s.exists() ? s.data() : {}) };
+  const d = { upiId: "", upiName: "Vendor", razorpayKey: "", commission: 5, ...(s.exists() ? s.data() : {}) };
   V.innerHTML = `<h3>Payment Settings</h3>
   <label>Aapka UPI ID (buyer ka paisa yahan aayega)</label><input id="s1" value="${esc(d.upiId)}" placeholder="naam@upi">
   <label>UPI par dikhne wala naam</label><input id="s2" value="${esc(d.upiName)}">
@@ -238,7 +240,7 @@ async function setTab() {
   $("#sv").onclick = async () => {
     const c = Number($("#s4").value);
     if (isNaN(c) || c < 0 || c > 50) return alert("Commission 0 se 50 ke beech rakho");
-    await setDoc(doc(db, "settings", "app"), { upiId: $("#s1").value.trim(), upiName: $("#s2").value.trim() || "OldKart", razorpayKey: $("#s3").value.trim(), commission: c });
+    await setDoc(doc(db, "settings", "app"), { upiId: $("#s1").value.trim(), upiName: $("#s2").value.trim() || "Vendor", razorpayKey: $("#s3").value.trim(), commission: c });
     alert("Settings save ho gayi");
   };
 }
