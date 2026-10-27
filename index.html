@@ -22,7 +22,9 @@ button.g{background:#fff;color:var(--p);border:1px solid var(--p)}
 .im{display:flex;gap:6px;overflow-x:auto}.im img{height:110px;border-radius:8px}
 .bar{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:14px}
 .bar span{width:44px;color:var(--mut)}.bar i{display:block;height:14px;background:var(--p);border-radius:4px;min-width:2px}
+.msg{background:#eef0f6;padding:8px 12px;border-radius:10px;margin:2px 0 8px;display:inline-block;max-width:90%;word-break:break-word}
 small{color:var(--mut)}
+label{font-size:13px;color:var(--mut)}
 </style>
 </head>
 <body>
@@ -31,13 +33,15 @@ small{color:var(--mut)}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, query, where, limit, getCountFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, limit, getCountFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { firebaseConfig } from "./config.js";
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
 const $ = s => document.querySelector(s), R = $("#root");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const DEF_CATS = ["Mobiles", "Vehicles", "Electronics", "Furniture", "Fashion", "Books", "Others"];
+const comm = p => Math.round(p.amount * (p.commissionPercent ?? 5)) / 100;
+const dt = p => p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString("en-IN") : "";
 let V;
 
 function loginView(msg = "") {
@@ -56,10 +60,13 @@ onAuthStateChanged(auth, async u => {
   if (!s.exists() || s.data().role !== "admin") { await signOut(auth); return loginView("Ye account admin nahi hai"); }
   R.innerHTML = `<h2>OldKart Admin</h2><div class="nav" id="nv">
   <button data-t="dash">📊 Dashboard</button><button data-t="ads">📝 Ads</button>
-  <button data-t="users">👥 Users</button><button data-t="cats">🗂 Categories</button><button class="g" id="lo">Logout</button></div><div id="v"></div>`;
+  <button data-t="users">👥 Users</button><button data-t="cats">🗂 Categories</button>
+  <button data-t="pay">💳 Payments</button><button data-t="earn">💰 Meri Kamai</button>
+  <button data-t="chats">💬 Chats</button><button data-t="set">⚙️ Settings</button>
+  <button class="g" id="lo">Logout</button></div><div id="v"></div>`;
   V = $("#v");
   $("#lo").onclick = () => signOut(auth);
-  const tabs = { dash, ads: () => adsTab("pending"), users: usersTab, cats: catsTab };
+  const tabs = { dash, ads: () => adsTab("pending"), users: usersTab, cats: catsTab, pay: () => payTab("pending"), earn: earnTab, chats: chatsTab, set: setTab };
   $("#nv").onclick = e => {
     const t = e.target.dataset.t; if (!t) return;
     document.querySelectorAll("#nv button").forEach(b => b.classList.toggle("on", b === e.target));
@@ -68,6 +75,7 @@ onAuthStateChanged(auth, async u => {
   $("#nv button").click();
 });
 
+/* ---------- dashboard ---------- */
 async function dash() {
   V.innerHTML = "Loading...";
   const cnt = async q => (await getCountFromServer(q)).data().count;
@@ -84,6 +92,7 @@ async function dash() {
   ${days.map((x, i) => `<div class="bar"><span>${x.slice(5)}</span><i style="width:${d[i] / mx * 70}%"></i> ${d[i]}</div>`).join("")}`;
 }
 
+/* ---------- ads ---------- */
 async function adsTab(st) {
   V.innerHTML = `<select id="st">${["pending", "approved", "rejected", "sold"].map(x => `<option ${x === st ? "selected" : ""}>${x}</option>`).join("")}</select><div id="al">Loading...</div>`;
   $("#st").onchange = e => adsTab(e.target.value);
@@ -107,6 +116,7 @@ async function adsTab(st) {
   };
 }
 
+/* ---------- users ---------- */
 async function usersTab() {
   V.innerHTML = `<input id="uq" placeholder="Naam ya email search karo"><div id="ul">Loading...</div>`;
   const s = await getDocs(collection(db, "users"));
@@ -125,6 +135,7 @@ async function usersTab() {
   };
 }
 
+/* ---------- categories ---------- */
 async function catsTab() {
   V.innerHTML = `<input id="cn" placeholder="Nayi category ka naam"><button id="ca">Add category</button>
   <button class="g" id="cd">Default categories daalo</button><div id="cl">Loading...</div>`;
@@ -137,6 +148,91 @@ async function catsTab() {
   $("#ca").onclick = async () => { const n = $("#cn").value.trim(); if (!n) return; await addDoc(collection(db, "categories"), { name: n }); $("#cn").value = ""; load(); };
   $("#cd").onclick = async () => { for (const n of DEF_CATS) await addDoc(collection(db, "categories"), { name: n }); load(); };
   $("#cl").onclick = async e => { const id = e.target.dataset.d; if (id && confirm("Delete karein?")) { await deleteDoc(doc(db, "categories", id)); load(); } };
+}
+
+/* ---------- payments ---------- */
+async function payTab(st) {
+  V.innerHTML = `<select id="st">${["pending", "verified", "settled", "rejected"].map(x => `<option ${x === st ? "selected" : ""}>${x}</option>`).join("")}</select>
+  <p><small>pending = verify karna baaki • verified = paisa mil gaya, seller ko bhejna baaki • settled = seller ko bhej diya</small></p><div id="pl">Loading...</div>`;
+  $("#st").onchange = e => payTab(e.target.value);
+  const [s, us] = await Promise.all([
+    getDocs(query(collection(db, "payments"), where("status", "==", st), limit(100))),
+    getDocs(collection(db, "users"))
+  ]);
+  const U = {}; us.docs.forEach(d => U[d.id] = d.data());
+  $("#pl").innerHTML = s.empty ? "<p>Is status mein koi payment nahi</p>" : s.docs.map(d => {
+    const p = d.data(), c = comm(p), pay = Math.round((p.amount - c) * 100) / 100;
+    return `<div class="c"><b>${esc(p.adTitle)}</b> — ₹${p.amount}<br>
+    <small>Buyer: ${esc(p.buyerName)} → Seller: ${esc(p.sellerName)} • ${dt(p)}</small><br>
+    <small>Method: ${esc(p.method)} • ID: <b>${esc(p.ref)}</b></small><br>
+    Meri commission (${p.commissionPercent}%): <b>₹${c}</b> • Seller ko dena: <b>₹${pay}</b><br>
+    <small>Seller UPI: ${esc(U[p.sellerId]?.upi || "(seller ne UPI nahi diya)")}</small><div style="margin-top:8px">
+    ${st === "pending" ? `<button data-vf="${d.id}" data-ad="${p.adId}">✅ Payment mil gayi (Verify)</button><button class="g" data-rj="${d.id}">❌ Reject</button>` : ""}
+    ${st === "verified" ? `<button data-sd="${d.id}">💸 Seller ko bhej diya</button>` : ""}</div></div>`;
+  }).join("");
+  $("#pl").onclick = async e => {
+    const t = e.target.dataset;
+    if (t.vf) {
+      await updateDoc(doc(db, "payments", t.vf), { status: "verified" });
+      try { await updateDoc(doc(db, "ads", t.ad), { status: "sold" }); } catch (x) {}
+    } else if (t.rj) { if (!confirm("Payment reject karein?")) return; await updateDoc(doc(db, "payments", t.rj), { status: "rejected" }); }
+    else if (t.sd) { if (!confirm("Seller ko paisa bhej diya?")) return; await updateDoc(doc(db, "payments", t.sd), { status: "settled" }); }
+    else return;
+    payTab(st);
+  };
+}
+
+/* ---------- earnings ---------- */
+async function earnTab() {
+  V.innerHTML = "Loading...";
+  const s = await getDocs(query(collection(db, "payments"), where("status", "in", ["verified", "settled"]), limit(500)));
+  const L = s.docs.map(d => d.data()).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  const total = L.reduce((x, p) => x + comm(p), 0), sales = L.reduce((x, p) => x + p.amount, 0);
+  V.innerHTML = `<div class="stats"><div><b>₹${Math.round(total * 100) / 100}</b>Meri total commission</div><div><b>₹${sales}</b>Total sales (verified)</div></div>
+  <h3>Kis product se kitna mila</h3>
+  ${L.length ? L.map(p => `<div class="c"><b>${esc(p.adTitle)}</b><br>Sale: ₹${p.amount} • Meri commission (${p.commissionPercent}%): <b>₹${comm(p)}</b><br>
+  <small>${esc(p.buyerName)} → ${esc(p.sellerName)} • ${dt(p)}</small></div>`).join("") : "<p>Abhi koi verified payment nahi</p>"}`;
+}
+
+/* ---------- chats (read only) ---------- */
+const mh = (m, nm) => `<small>${esc(nm)}</small><br>` + (m.type === "ad"
+  ? `<div class="msg">📎 Ad: ${esc(m.adTitle)} — ₹${m.adPrice}</div>`
+  : m.type === "img" ? `<div class="msg"><img src="${m.img}" style="max-width:200px;border-radius:8px" alt=""></div>`
+  : `<div class="msg">${esc(m.text)}</div>`) + "<br>";
+async function chatsTab() {
+  V.innerHTML = "Loading...";
+  const s = await getDocs(query(collection(db, "chats"), limit(200)));
+  const L = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.lastMessage)
+    .sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
+  V.innerHTML = L.length ? L.map(c => `<div class="c"><b>${esc(c.buyerName)} ↔ ${esc(c.sellerName)}</b><br><small>${esc(c.adTitle)}</small><br>${esc(c.lastMessage)}<br>
+  <button data-o="${c.id}">Poori chat dekho</button></div>`).join("") : "<p>Abhi koi chat nahi</p>";
+  V.onclick = async e => {
+    const id = e.target.dataset.o; if (!id) return;
+    const c = L.find(x => x.id === id);
+    const m = await getDocs(query(collection(db, "chats", id, "messages"), orderBy("createdAt")));
+    V.onclick = null;
+    V.innerHTML = `<button class="g" id="bk">← Wapas</button><h3>${esc(c.buyerName)} ↔ ${esc(c.sellerName)}</h3><small>${esc(c.adTitle)}</small><div style="margin-top:10px">
+    ${m.docs.map(d => { const x = d.data(); return mh(x, x.from === c.buyerId ? c.buyerName + " (buyer)" : c.sellerName + " (seller)"); }).join("")}</div>`;
+    $("#bk").onclick = chatsTab;
+  };
+}
+
+/* ---------- settings ---------- */
+async function setTab() {
+  const s = await getDoc(doc(db, "settings", "app"));
+  const d = { upiId: "", upiName: "OldKart", razorpayKey: "", commission: 5, ...(s.exists() ? s.data() : {}) };
+  V.innerHTML = `<h3>Payment Settings</h3>
+  <label>Aapka UPI ID (buyer ka paisa yahan aayega)</label><input id="s1" value="${esc(d.upiId)}" placeholder="naam@upi">
+  <label>UPI par dikhne wala naam</label><input id="s2" value="${esc(d.upiName)}">
+  <label>Razorpay Key ID (optional, online payment ke liye. Pehle rzp_test_ wali key se test karo)</label><input id="s3" value="${esc(d.razorpayKey)}" placeholder="rzp_test_xxxxxxxx">
+  <label>Meri commission (%)</label><input id="s4" type="number" value="${d.commission}">
+  <button id="sv">Save settings</button>`;
+  $("#sv").onclick = async () => {
+    const c = Number($("#s4").value);
+    if (isNaN(c) || c < 0 || c > 50) return alert("Commission 0 se 50 ke beech rakho");
+    await setDoc(doc(db, "settings", "app"), { upiId: $("#s1").value.trim(), upiName: $("#s2").value.trim() || "OldKart", razorpayKey: $("#s3").value.trim(), commission: c });
+    alert("Settings save ho gayi");
+  };
 }
 </script>
 </body>
