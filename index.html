@@ -67,10 +67,12 @@ onAuthStateChanged(auth, async u => {
   V = $("#v");
   $("#lo").onclick = () => signOut(auth);
   const tabs = { dash, ads: () => adsTab("pending"), users: usersTab, cats: catsTab, pay: () => payTab("pending"), earn: earnTab, chats: chatsTab, set: setTab };
-  $("#nv").onclick = e => {
+  $("#nv").onclick = async e => {
     const t = e.target.dataset.t; if (!t) return;
     document.querySelectorAll("#nv button").forEach(b => b.classList.toggle("on", b === e.target));
-    tabs[t]();
+    V.onclick = null; V.innerHTML = "Loading...";
+    try { await tabs[t](); }
+    catch (x) { V.innerHTML = `<p style="color:red"><b>Error:</b> ${esc(x.message)}</p><p><small>Zyada chance: Firestore Rules publish nahi hue. Firebase console → Firestore → Rules mein firestore.rules paste karke Publish karo.</small></p>`; }
   };
   $("#nv button").click();
 });
@@ -118,13 +120,17 @@ async function adsTab(st) {
 
 /* ---------- users ---------- */
 async function usersTab() {
-  V.innerHTML = `<input id="uq" placeholder="Naam ya email search karo"><div id="ul">Loading...</div>`;
+  V.innerHTML = `<input id="uq" placeholder="Naam, email, mobile ya UPI se search karo"><div id="ul">Loading...</div>`;
   const s = await getDocs(collection(db, "users"));
   const U = s.docs.map(d => ({ id: d.id, ...d.data() }));
   const draw = () => {
     const q = $("#uq").value.toLowerCase();
-    $("#ul").innerHTML = U.filter(u => ((u.name || "") + (u.email || "")).toLowerCase().includes(q)).map(u =>
-      `<div class="c"><b>${esc(u.name)}</b> ${u.role === "admin" ? "(admin)" : ""} ${u.isBlocked ? "🚫" : ""}<br><small>${esc(u.email)}</small><br>
+    $("#ul").innerHTML = U.filter(u => ((u.name || "") + (u.email || "") + (u.phone || "") + (u.upi || "")).toLowerCase().includes(q)).map(u =>
+      `<div class="c"><b>${esc(u.name)}</b> ${u.role === "admin" ? "(admin)" : ""} ${u.isBlocked ? "🚫 Blocked" : ""}<br>
+      <small>📧 ${esc(u.email)}</small><br>
+      <small>📱 Mobile: ${esc(u.phone) || "(nahi diya)"}</small><br>
+      <small>💳 UPI: ${esc(u.upi) || "(nahi diya)"}</small><br>
+      <small>📍 City: ${esc(u.city) || "(nahi diya)"} • Joined: ${u.createdAt?.toDate ? u.createdAt.toDate().toLocaleDateString("en-IN") : ""}</small><br>
       ${u.role === "admin" ? "" : `<button data-b="${u.id}">${u.isBlocked ? "✅ Unblock" : "🚫 Block"}</button>`}</div>`).join("");
   };
   draw(); $("#uq").oninput = draw;
@@ -166,7 +172,9 @@ async function payTab(st) {
     <small>Buyer: ${esc(p.buyerName)} → Seller: ${esc(p.sellerName)} • ${dt(p)}</small><br>
     <small>Method: ${esc(p.method)} • ID: <b>${esc(p.ref)}</b></small><br>
     Meri commission (${p.commissionPercent}%): <b>₹${c}</b> • Seller ko dena: <b>₹${pay}</b><br>
-    <small>Seller UPI: ${esc(U[p.sellerId]?.upi || "(seller ne UPI nahi diya)")}</small><div style="margin-top:8px">
+    <small>Seller UPI: ${esc(U[p.sellerId]?.upi || "(seller ne UPI nahi diya)")} • Seller mobile: ${esc(U[p.sellerId]?.phone || "-")}</small><br>
+    <small>Buyer mobile: ${esc(U[p.buyerId]?.phone || "-")}</small>
+    ${st === "pending" ? `<br><small>⚠️ Verify se pehle apne UPI app mein dekho: ye ID (${esc(p.ref)}) aur ₹${p.amount} sach mein aaye hain.</small>` : ""}<div style="margin-top:8px">
     ${st === "pending" ? `<button data-vf="${d.id}" data-ad="${p.adId}">✅ Payment mil gayi (Verify)</button><button class="g" data-rj="${d.id}">❌ Reject</button>` : ""}
     ${st === "verified" ? `<button data-sd="${d.id}">💸 Seller ko bhej diya</button>` : ""}</div></div>`;
   }).join("");
