@@ -205,6 +205,8 @@ async function earnTab() {
 }
 
 /* ---------- chats (read only) ---------- */
+const nms = c => c.names ? Object.values(c.names).map(esc).join(" ↔ ") : `${esc(c.buyerName)} ↔ ${esc(c.sellerName)}`;
+const sender = (c, uid) => c.names ? (c.names[uid] || "User") : (uid === c.buyerId ? c.buyerName + " (buyer)" : c.sellerName + " (seller)");
 const mh = (m, nm) => `<small>${esc(nm)}</small><br>` + (m.type === "ad"
   ? `<div class="msg">📎 Ad: ${esc(m.adTitle)} — ₹${m.adPrice}</div>`
   : m.type === "img" ? `<div class="msg"><img src="${m.img}" style="max-width:200px;border-radius:8px" alt=""></div>`
@@ -214,15 +216,15 @@ async function chatsTab() {
   const s = await getDocs(query(collection(db, "chats"), limit(200)));
   const L = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.lastMessage)
     .sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
-  V.innerHTML = L.length ? L.map(c => `<div class="c"><b>${esc(c.buyerName)} ↔ ${esc(c.sellerName)}</b><br><small>${esc(c.adTitle)}</small><br>${esc(c.lastMessage)}<br>
+  V.innerHTML = L.length ? L.map(c => `<div class="c"><b>${nms(c)}</b><br><small>${esc(c.adTitle)}</small><br>${esc(c.lastMessage)}<br>
   <button data-o="${c.id}">Poori chat dekho</button></div>`).join("") : "<p>Abhi koi chat nahi</p>";
   V.onclick = async e => {
     const id = e.target.dataset.o; if (!id) return;
     const c = L.find(x => x.id === id);
     const m = await getDocs(query(collection(db, "chats", id, "messages"), orderBy("createdAt")));
     V.onclick = null;
-    V.innerHTML = `<button class="g" id="bk">← Wapas</button><h3>${esc(c.buyerName)} ↔ ${esc(c.sellerName)}</h3><small>${esc(c.adTitle)}</small><div style="margin-top:10px">
-    ${m.docs.map(d => { const x = d.data(); return mh(x, x.from === c.buyerId ? c.buyerName + " (buyer)" : c.sellerName + " (seller)"); }).join("")}</div>`;
+    V.innerHTML = `<button class="g" id="bk">← Wapas</button><h3>${nms(c)}</h3><small>${esc(c.adTitle)}</small><div style="margin-top:10px">
+    ${m.docs.map(d => { const x = d.data(); return mh(x, sender(c, x.from)); }).join("")}</div>`;
     $("#bk").onclick = chatsTab;
   };
 }
