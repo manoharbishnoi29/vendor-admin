@@ -25,6 +25,7 @@ button.g{background:#fff;color:var(--p);border:1px solid var(--p)}
 .msg{background:#eef0f6;padding:8px 12px;border-radius:10px;margin:2px 0 8px;display:inline-block;max-width:90%;word-break:break-word}
 small{color:var(--mut)}
 label{font-size:13px;color:var(--mut)}
+video{max-width:100%;max-height:260px;border-radius:8px;background:#000}
 </style>
 </head>
 <body>
@@ -33,7 +34,7 @@ label{font-size:13px;color:var(--mut)}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, limit, getCountFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, limit, getCountFromServer, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { firebaseConfig } from "./config.js";
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
@@ -62,11 +63,11 @@ onAuthStateChanged(auth, async u => {
   <button data-t="dash">📊 Dashboard</button><button data-t="ads">📝 Ads</button>
   <button data-t="users">👥 Users</button><button data-t="cats">🗂 Categories</button>
   <button data-t="pay">💳 Payments</button><button data-t="earn">💰 Meri Kamai</button>
-  <button data-t="chats">💬 Chats</button><button data-t="set">⚙️ Settings</button>
+  <button data-t="chats">💬 Chats</button><button data-t="prem">⭐ Premium</button><button data-t="rec">♻️ Recover</button><button data-t="set">⚙️ Settings</button>
   <button class="g" id="lo">Logout</button></div><div id="v"></div>`;
   V = $("#v");
   $("#lo").onclick = () => signOut(auth);
-  const tabs = { dash, ads: () => adsTab("pending"), users: usersTab, cats: catsTab, pay: () => payTab("pending"), earn: earnTab, chats: chatsTab, set: setTab };
+  const tabs = { dash, ads: () => adsTab("pending"), users: usersTab, cats: catsTab, pay: () => payTab("pending"), earn: earnTab, chats: chatsTab, prem: premTab, rec: recTab, set: setTab };
   $("#nv").onclick = async e => {
     const t = e.target.dataset.t; if (!t) return;
     document.querySelectorAll("#nv button").forEach(b => b.classList.toggle("on", b === e.target));
@@ -104,6 +105,7 @@ async function adsTab(st) {
   $("#al").innerHTML = s.empty ? "<p>Is status mein koi ad nahi</p>" : s.docs.map(d => {
     const a = d.data();
     return `<div class="c"><div class="im">${(a.images || []).map(i => `<img src="${i}" alt="">`).join("")}</div>
+    ${a.videoUrl ? `<video controls playsinline preload="metadata" src="${esc(a.videoUrl)}"></video>` : ""}
     <b>₹${a.price} — ${esc(a.title)}</b><p>${esc(a.description)}</p>
     <small>${esc(a.category)} • ${esc(a.city)} • Seller: ${esc(a.sellerName)}</small><div style="margin-top:8px">
     ${st !== "approved" ? `<button data-ap="${d.id}">✅ Approve</button>` : ""}
@@ -121,25 +123,105 @@ async function adsTab(st) {
 }
 
 /* ---------- users ---------- */
+const dtt = t => t?.toDate ? t.toDate().toLocaleDateString("en-IN") : "";
+const premOn = u => (u.premiumUntil?.toMillis?.() || 0) > Date.now();
+let UF = "active";
+async function grantPremium(id, days) {
+  const r = doc(db, "users", id), s = await getDoc(r);
+  const cur = s.data()?.premiumUntil?.toMillis?.() || 0;
+  await updateDoc(r, { premiumUntil: Timestamp.fromMillis(Math.max(Date.now(), cur) + days * 864e5) });
+}
+async function wipeUser(id) {
+  const ads = await getDocs(query(collection(db, "ads"), where("userId", "==", id)));
+  for (const d of ads.docs) await deleteDoc(d.ref);
+  await setDoc(doc(db, "users", id), { name: "Deleted user", email: "", phone: "", city: "", upi: "", role: "user", isBlocked: true, deleted: true, permanent: true, deletedAt: serverTimestamp(), deletedBy: "admin" });
+}
 async function usersTab() {
-  V.innerHTML = `<input id="uq" placeholder="Naam, email, mobile ya UPI se search karo"><div id="ul">Loading...</div>`;
+  V.innerHTML = `<select id="uf"><option value="active">Active users</option><option value="deleted">Deleted users (data safe)</option><option value="all">Sab</option></select>
+  <input id="uq" placeholder="Naam, email, mobile ya UPI se search karo"><div id="ul">Loading...</div>`;
+  $("#uf").value = UF;
   const s = await getDocs(collection(db, "users"));
   const U = s.docs.map(d => ({ id: d.id, ...d.data() }));
   const draw = () => {
-    const q = $("#uq").value.toLowerCase();
-    $("#ul").innerHTML = U.filter(u => ((u.name || "") + (u.email || "") + (u.phone || "") + (u.upi || "")).toLowerCase().includes(q)).map(u =>
-      `<div class="c"><b>${esc(u.name)}</b> ${u.role === "admin" ? "(admin)" : ""} ${u.isBlocked ? "🚫 Blocked" : ""}<br>
-      <small>📧 ${esc(u.email)}</small><br>
-      <small>📱 Mobile: ${esc(u.phone) || "(nahi diya)"}</small><br>
+    const q = $("#uq").value.toLowerCase(), f = $("#uf").value;
+    const L = U.filter(u => (f === "all" || (f === "deleted") === !!u.deleted) && ((u.name || "") + (u.email || "") + (u.phone || "") + (u.upi || "")).toLowerCase().includes(q));
+    $("#ul").innerHTML = L.map(u => {
+      let act = "";
+      if (u.role !== "admin") {
+        if (u.deleted && !u.permanent) act = `<button data-rs="${u.id}">♻️ Restore</button><button class="g" data-pd="${u.id}">❌ Permanent delete</button>`;
+        else if (!u.deleted) act = `<button data-b="${u.id}">${u.isBlocked ? "✅ Unblock" : "🚫 Block"}</button><button class="g" data-dl="${u.id}">🗑 Delete</button>
+          <button class="g" data-pm="${u.id}:30">⭐ +30 din</button><button class="g" data-pm="${u.id}:365">⭐ +365 din</button>${premOn(u) ? `<button class="g" data-pr="${u.id}">Premium hatao</button>` : ""}`;
+      }
+      return `<div class="c"><b>${esc(u.name)}</b> ${u.role === "admin" ? "(admin)" : ""} ${u.isBlocked && !u.deleted ? "🚫 Blocked" : ""}
+      ${u.deleted ? (u.permanent ? "🗑 Permanently deleted" : "🗑 Deleted (" + esc(u.deletedBy || "") + ", " + dtt(u.deletedAt) + ")") : ""}${premOn(u) ? " ⭐ till " + dtt(u.premiumUntil) : ""}<br>
+      <small>📧 ${esc(u.email)}</small><br><small>📱 Mobile: ${esc(u.phone) || "(nahi diya)"}</small><br>
       <small>💳 UPI: ${esc(u.upi) || "(nahi diya)"}</small><br>
-      <small>📍 City: ${esc(u.city) || "(nahi diya)"} • Joined: ${u.createdAt?.toDate ? u.createdAt.toDate().toLocaleDateString("en-IN") : ""}</small><br>
-      ${u.role === "admin" ? "" : `<button data-b="${u.id}">${u.isBlocked ? "✅ Unblock" : "🚫 Block"}</button>`}</div>`).join("");
+      <small>📍 City: ${esc(u.city) || "(nahi diya)"} • Joined: ${dtt(u.createdAt)}</small><br>${act}</div>`;
+    }).join("") || "<p>Koi user nahi</p>";
   };
-  draw(); $("#uq").oninput = draw;
+  draw(); $("#uq").oninput = draw; $("#uf").onchange = () => { UF = $("#uf").value; draw(); };
   $("#ul").onclick = async e => {
-    const id = e.target.dataset.b; if (!id) return;
-    const u = U.find(x => x.id === id); u.isBlocked = !u.isBlocked;
-    await updateDoc(doc(db, "users", id), { isBlocked: u.isBlocked }); draw();
+    const t = e.target.dataset, ref = id => doc(db, "users", id);
+    try {
+      if (t.b) { const u = U.find(x => x.id === t.b); await updateDoc(ref(t.b), { isBlocked: !u.isBlocked }); }
+      else if (t.dl) { if (!confirm("Is user ko delete karein? (Uska data admin panel mein safe rahega)")) return; await updateDoc(ref(t.dl), { deleted: true, deletedAt: serverTimestamp(), deletedBy: "admin" }); }
+      else if (t.rs) { await updateDoc(ref(t.rs), { deleted: false }); }
+      else if (t.pd) { if (!confirm("PERMANENT delete? User ka personal data hamesha ke liye hat jayega aur uski sabhi ads delete hongi. Ye wapas nahi hoga.")) return; await wipeUser(t.pd); alert("Permanent delete ho gaya. Poori tarah hatane ke liye Firebase console → Authentication → Users se bhi is user ko delete kar do."); }
+      else if (t.pm) { const [id, days] = t.pm.split(":"); await grantPremium(id, Number(days)); }
+      else if (t.pr) { await updateDoc(ref(t.pr), { premiumUntil: null }); }
+      else return;
+    } catch (x) { alert("Error: " + x.message); return; }
+    usersTab();
+  };
+}
+
+/* ---------- premium requests ---------- */
+async function premTab() {
+  V.innerHTML = "Loading...";
+  const [rq, us] = await Promise.all([
+    getDocs(query(collection(db, "premium_requests"), where("status", "==", "pending"), limit(100))),
+    getDocs(collection(db, "users"))
+  ]);
+  const act = us.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => premOn(u) && !u.deleted);
+  V.innerHTML = `<h3>Premium requests (pending)</h3>` + (rq.empty ? "<p>Koi pending request nahi</p>" : rq.docs.map(d => {
+    const r = d.data();
+    return `<div class="c"><b>${esc(r.name)}</b> — ${r.plan === "year" ? "Year" : "Month"} plan • ₹${r.amount}<br>
+    <small>${esc(r.email)} • UTR: <b>${esc(r.ref)}</b> • ${dtt(r.createdAt)}</small><br>
+    <small>⚠️ Approve se pehle apne UPI app mein ye UTR aur ₹${r.amount} check karo.</small>
+    <div style="margin-top:8px"><button data-ap="${d.id}" data-uid="${r.uid}" data-days="${r.plan === "year" ? 365 : 30}">✅ Approve</button><button class="g" data-rj="${d.id}">❌ Reject</button></div></div>`;
+  }).join("")) + `<h3>Active Premium users (${act.length})</h3>` + (act.map(u => `<div class="c"><b>${esc(u.name)}</b> ⭐ till ${dtt(u.premiumUntil)}<br><small>${esc(u.email)}</small></div>`).join("") || "<p>Abhi koi nahi</p>");
+  V.onclick = async e => {
+    const t = e.target.dataset;
+    try {
+      if (t.ap) { await grantPremium(t.uid, Number(t.days)); await updateDoc(doc(db, "premium_requests", t.ap), { status: "approved" }); }
+      else if (t.rj) { if (!confirm("Reject karein?")) return; await updateDoc(doc(db, "premium_requests", t.rj), { status: "rejected" }); }
+      else return;
+    } catch (x) { alert("Error: " + x.message); return; }
+    premTab();
+  };
+}
+
+/* ---------- account recover requests ---------- */
+async function recTab() {
+  V.innerHTML = "Loading...";
+  const s = await getDocs(query(collection(db, "recover_requests"), where("status", "==", "pending"), limit(100)));
+  V.innerHTML = `<h3>Account recover requests</h3>` + (s.empty ? "<p>Koi pending request nahi</p>" : s.docs.map(d => {
+    const r = d.data();
+    return `<div class="c"><b>${esc(r.name)}</b><br><small>${esc(r.email)} • ${dtt(r.createdAt)}</small>
+    <div style="margin-top:8px"><button data-ok="${d.id}">✅ Account wapas do</button><button class="g" data-no="${d.id}">❌ Reject</button></div></div>`;
+  }).join(""));
+  V.onclick = async e => {
+    const t = e.target.dataset;
+    try {
+      if (t.ok) {
+        const us = await getDoc(doc(db, "users", t.ok));
+        if (us.data()?.permanent) { alert("Ye account permanently delete ho chuka hai, wapas nahi aa sakta."); return; }
+        await updateDoc(doc(db, "users", t.ok), { deleted: false });
+        await updateDoc(doc(db, "recover_requests", t.ok), { status: "approved" });
+      } else if (t.no) { await updateDoc(doc(db, "recover_requests", t.no), { status: "rejected" }); }
+      else return;
+    } catch (x) { alert("Error: " + x.message); return; }
+    recTab();
   };
 }
 
@@ -209,6 +291,7 @@ const nms = c => c.names ? Object.values(c.names).map(esc).join(" ↔ ") : `${es
 const sender = (c, uid) => c.names ? (c.names[uid] || "User") : (uid === c.buyerId ? c.buyerName + " (buyer)" : c.sellerName + " (seller)");
 const mh = (m, nm) => `<small>${esc(nm)}</small><br>` + (m.type === "ad"
   ? `<div class="msg">📎 Ad: ${esc(m.adTitle)} — ₹${m.adPrice}</div>`
+  : m.type === "video" ? `<div class="msg"><video controls playsinline preload="metadata" src="${esc(m.url)}"></video></div>`
   : m.type === "img" ? `<div class="msg"><img src="${m.img}" style="max-width:200px;border-radius:8px" alt=""></div>`
   : `<div class="msg">${esc(m.text)}</div>`) + "<br>";
 async function chatsTab() {
@@ -232,17 +315,23 @@ async function chatsTab() {
 /* ---------- settings ---------- */
 async function setTab() {
   const s = await getDoc(doc(db, "settings", "app"));
-  const d = { upiId: "", upiName: "Vendor", razorpayKey: "", commission: 5, ...(s.exists() ? s.data() : {}) };
+  const d = { upiId: "", upiName: "Vendor", razorpayKey: "", commission: 5, cloudinaryCloud: "", cloudinaryPreset: "", premiumMonth: 50, premiumYear: 600, ...(s.exists() ? s.data() : {}) };
   V.innerHTML = `<h3>Payment Settings</h3>
   <label>Aapka UPI ID (buyer ka paisa yahan aayega)</label><input id="s1" value="${esc(d.upiId)}" placeholder="naam@upi">
   <label>UPI par dikhne wala naam</label><input id="s2" value="${esc(d.upiName)}">
   <label>Razorpay Key ID (optional, online payment ke liye. Pehle rzp_test_ wali key se test karo)</label><input id="s3" value="${esc(d.razorpayKey)}" placeholder="rzp_test_xxxxxxxx">
   <label>Meri commission (%)</label><input id="s4" type="number" value="${d.commission}">
+  <h3>Premium aur Video</h3>
+  <label>Premium price: 1 month (₹)</label><input id="s7" type="number" value="${d.premiumMonth}">
+  <label>Premium price: 1 year (₹)</label><input id="s8" type="number" value="${d.premiumYear}">
+  <label>Cloudinary Cloud name (video upload ke liye)</label><input id="s5" value="${esc(d.cloudinaryCloud)}" placeholder="jaise: dxxxxxxxx">
+  <label>Cloudinary Upload preset (Unsigned wala)</label><input id="s6" value="${esc(d.cloudinaryPreset)}" placeholder="jaise: vendor_videos">
   <button id="sv">Save settings</button>`;
   $("#sv").onclick = async () => {
-    const c = Number($("#s4").value);
+    const c = Number($("#s4").value), pm = Number($("#s7").value), py = Number($("#s8").value);
     if (isNaN(c) || c < 0 || c > 50) return alert("Commission 0 se 50 ke beech rakho");
-    await setDoc(doc(db, "settings", "app"), { upiId: $("#s1").value.trim(), upiName: $("#s2").value.trim() || "Vendor", razorpayKey: $("#s3").value.trim(), commission: c });
+    if (!(pm > 0) || !(py > 0)) return alert("Premium price sahi daalo");
+    await setDoc(doc(db, "settings", "app"), { upiId: $("#s1").value.trim(), upiName: $("#s2").value.trim() || "Vendor", razorpayKey: $("#s3").value.trim(), commission: c, premiumMonth: pm, premiumYear: py, cloudinaryCloud: $("#s5").value.trim(), cloudinaryPreset: $("#s6").value.trim() });
     alert("Settings save ho gayi");
   };
 }
