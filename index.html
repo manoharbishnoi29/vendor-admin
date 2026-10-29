@@ -26,6 +26,9 @@ button.g{background:#fff;color:var(--p);border:1px solid var(--p)}
 small{color:var(--mut)}
 label{font-size:13px;color:var(--mut)}
 video{max-width:100%;max-height:260px;border-radius:8px;background:#000}
+.ov{position:fixed;inset:0;background:#0007;z-index:30;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:#fff;width:100%;max-width:700px;border-radius:16px 16px 0 0;padding:16px;max-height:88vh;overflow:auto}
+.sheet button{margin:6px 6px 0 0}
 </style>
 </head>
 <body>
@@ -34,7 +37,7 @@ video{max-width:100%;max-height:260px;border-radius:8px;background:#000}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, limit, getCountFromServer, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, limit, getCountFromServer, serverTimestamp, Timestamp, onSnapshot, arrayUnion } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { firebaseConfig } from "./config.js";
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
@@ -79,6 +82,66 @@ onAuthStateChanged(auth, async u => {
   };
   $("#nv button").click();
 });
+
+/* ---------- helpers: modal, date, chat ---------- */
+const ymd = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+const fmtD = x => x ? x.split("-").reverse().join("/") : "-";
+function modal(html) {
+  const ov = document.createElement("div"); ov.className = "ov"; ov.innerHTML = `<div class="sheet">${html}</div>`;
+  document.body.appendChild(ov);
+  return ov;
+}
+function askDate(title, def) {
+  return new Promise(res => {
+    const ov = modal(`<h3>${esc(title)}</h3><input type="date" id="dtv" min="${ymd(new Date())}" value="${esc(def || "")}"><button id="dok">Save</button><button class="g" id="dno">Cancel</button>`);
+    ov.querySelector("#dno").onclick = () => { ov.remove(); res(null); };
+    ov.querySelector("#dok").onclick = () => { const v = ov.querySelector("#dtv").value; if (!v) return alert("Date chuno"); ov.remove(); res(v); };
+  });
+}
+async function openChatWith(uid, uname) {
+  const aid = auth.currentUser.uid, cid = [aid, uid].sort().join("_");
+  const myName = (await getDoc(doc(db, "users", aid))).data()?.name || "Admin";
+  try { await setDoc(doc(db, "chats", cid), { participants: [aid, uid].sort(), names: { [aid]: myName, [uid]: uname } }, { merge: true }); }
+  catch (x) { return alert("Chat nahi khuli: " + x.message); }
+  const ov = modal(`<div style="display:flex;justify-content:space-between;align-items:center"><b>💬 ${esc(uname)}</b><button class="g" id="cx">Band karo</button></div>
+  <div id="cm" style="height:45vh;overflow-y:auto;background:#f2f4f7;border-radius:8px;padding:8px;margin:8px 0"></div>
+  <div style="display:flex;gap:6px"><input id="ci" placeholder="Message likho..."><button id="cs">Send</button></div>`);
+  const stop = onSnapshot(query(collection(db, "chats", cid, "messages"), orderBy("createdAt")), s => {
+    const box = ov.querySelector("#cm");
+    box.innerHTML = s.docs.map(d => {
+      const m = d.data(), mine = m.from === aid;
+      const body = m.type === "ad" ? "📎 Ad: " + esc(m.adTitle) : m.type === "img" ? `<img src="${m.img}" style="max-width:180px;border-radius:6px" alt="">` : m.type === "video" ? `<video controls src="${esc(m.url)}"></video>` : esc(m.text);
+      return `<div style="text-align:${mine ? "right" : "left"}"><span class="msg" style="${mine ? "background:#3b3fd8;color:#fff" : ""}">${body}</span></div>`;
+    }).join("");
+    box.scrollTop = 1e9;
+  }, () => {});
+  ov.querySelector("#cx").onclick = () => { stop(); ov.remove(); };
+  const send = async () => {
+    const i = ov.querySelector("#ci"), t = i.value.trim(); if (!t) return; i.value = "";
+    try {
+      await setDoc(doc(db, "chats", cid), { lastMessage: t, updatedAt: serverTimestamp() }, { merge: true });
+      await addDoc(collection(db, "chats", cid, "messages"), { from: aid, type: "text", text: t, createdAt: serverTimestamp() });
+    } catch (x) { alert("Send nahi hua: " + x.message); }
+  };
+  ov.querySelector("#cs").onclick = send;
+  ov.querySelector("#ci").onkeydown = e => { if (e.key === "Enter") send(); };
+}
+function paySellerSheet(id, p, sd, after) {
+  const c = comm(p), pay = Math.round((p.amount - c) * 100) / 100, upi = sd?.upi || "";
+  const link = upi ? `upi://pay?pa=${encodeURIComponent(upi)}&pn=${encodeURIComponent(p.sellerName)}&am=${pay}&cu=INR&tn=${encodeURIComponent("Vendor payout " + (p.adTitle || "").slice(0, 30))}` : "";
+  const ov = modal(`<h3>Seller ko pay karo</h3>
+  <p><b>${esc(p.sellerName)}</b> • 📱 ${esc(sd?.phone || "-")}<br>Amount: <b>₹${pay}</b> (₹${p.amount} - commission ₹${c})<br>UPI ID: <b>${esc(upi) || "(seller ne UPI nahi diya)"}</b></p>
+  ${upi ? `<a href="${link}" style="display:block;text-align:center;background:#3b3fd8;color:#fff;padding:12px;border-radius:8px;text-decoration:none">UPI app kholo aur pay karo</a>` : `<p style="color:#c0392b">Seller se chat karke UPI ID mangwao.</p><button id="cs2">💬 Seller se chat karo</button>`}
+  <input id="su" placeholder="Pay karne ke baad UPI Transaction ID (optional)" style="margin-top:8px">
+  <button id="sdn">✅ Pay ho gaya: Settled mark karo</button><button class="g" id="sx">Band karo</button>`);
+  ov.querySelector("#sx").onclick = () => ov.remove();
+  if (ov.querySelector("#cs2")) ov.querySelector("#cs2").onclick = () => openChatWith(p.sellerId, p.sellerName);
+  ov.querySelector("#sdn").onclick = async () => {
+    if (!confirm("Seller ko paisa bhej diya? Isse payment 'settled' ho jayegi.")) return;
+    try { await updateDoc(doc(db, "payments", id), { status: "settled", settleRef: ov.querySelector("#su").value.trim(), settledAt: serverTimestamp() }); ov.remove(); if (after) after(); }
+    catch (x) { alert("Error: " + x.message); }
+  };
+}
 
 /* ---------- dashboard ---------- */
 async function dash() {
@@ -149,7 +212,7 @@ async function usersTab() {
       let act = "";
       if (u.role !== "admin") {
         if (u.deleted && !u.permanent) act = `<button data-rs="${u.id}">♻️ Restore</button><button class="g" data-pd="${u.id}">❌ Permanent delete</button>`;
-        else if (!u.deleted) act = `<button data-b="${u.id}">${u.isBlocked ? "✅ Unblock" : "🚫 Block"}</button><button class="g" data-dl="${u.id}">🗑 Delete</button>
+        else if (!u.deleted) act = `<button class="g" data-ch="${u.id}" data-nm="${esc(u.name)}">💬 Chat</button><button data-b="${u.id}">${u.isBlocked ? "✅ Unblock" : "🚫 Block"}</button><button class="g" data-dl="${u.id}">🗑 Delete</button>
           <button class="g" data-pm="${u.id}:30">⭐ +30 din</button><button class="g" data-pm="${u.id}:365">⭐ +365 din</button>${premOn(u) ? `<button class="g" data-pr="${u.id}">Premium hatao</button>` : ""}`;
       }
       return `<div class="c"><b>${esc(u.name)}</b> ${u.role === "admin" ? "(admin)" : ""} ${u.isBlocked && !u.deleted ? "🚫 Blocked" : ""}
@@ -163,7 +226,8 @@ async function usersTab() {
   $("#ul").onclick = async e => {
     const t = e.target.dataset, ref = id => doc(db, "users", id);
     try {
-      if (t.b) { const u = U.find(x => x.id === t.b); await updateDoc(ref(t.b), { isBlocked: !u.isBlocked }); }
+      if (t.ch) { openChatWith(t.ch, t.nm); return; }
+      else if (t.b) { const u = U.find(x => x.id === t.b); await updateDoc(ref(t.b), { isBlocked: !u.isBlocked }); }
       else if (t.dl) { if (!confirm("Is user ko delete karein? (Uska data admin panel mein safe rahega)")) return; await updateDoc(ref(t.dl), { deleted: true, deletedAt: serverTimestamp(), deletedBy: "admin" }); }
       else if (t.rs) { await updateDoc(ref(t.rs), { deleted: false }); }
       else if (t.pd) { if (!confirm("PERMANENT delete? User ka personal data hamesha ke liye hat jayega aur uski sabhi ads delete hongi. Ye wapas nahi hoga.")) return; await wipeUser(t.pd); alert("Permanent delete ho gaya. Poori tarah hatane ke liye Firebase console → Authentication → Users se bhi is user ko delete kar do."); }
@@ -241,35 +305,54 @@ async function catsTab() {
 }
 
 /* ---------- payments ---------- */
+const PF = { pending: "Verify baaki", verified: "Seller ko pay baaki", settled: "Pay ho chuka", alert: "⚠️ Delivery alert (buyer ko nahi mila)", rejected: "Rejected" };
 async function payTab(st) {
-  V.innerHTML = `<select id="st">${["pending", "verified", "settled", "rejected"].map(x => `<option ${x === st ? "selected" : ""}>${x}</option>`).join("")}</select>
-  <p><small>pending = verify karna baaki • verified = paisa mil gaya, seller ko bhejna baaki • settled = seller ko bhej diya</small></p><div id="pl">Loading...</div>`;
+  V.innerHTML = `<select id="st">${Object.entries(PF).map(([k, v]) => `<option value="${k}" ${k === st ? "selected" : ""}>${v}</option>`).join("")}</select><div id="pl">Loading...</div>`;
   $("#st").onchange = e => payTab(e.target.value);
-  const [s, us] = await Promise.all([
-    getDocs(query(collection(db, "payments"), where("status", "==", st), limit(100))),
-    getDocs(collection(db, "users"))
-  ]);
+  const q = st === "alert"
+    ? query(collection(db, "payments"), where("deliveryStatus", "==", "not_received"), limit(100))
+    : query(collection(db, "payments"), where("status", "==", st), limit(100));
+  const [s, us] = await Promise.all([getDocs(q), getDocs(collection(db, "users"))]);
   const U = {}; us.docs.forEach(d => U[d.id] = d.data());
-  $("#pl").innerHTML = s.empty ? "<p>Is status mein koi payment nahi</p>" : s.docs.map(d => {
-    const p = d.data(), c = comm(p), pay = Math.round((p.amount - c) * 100) / 100;
+  const dets = {}, P = {};
+  await Promise.all(s.docs.map(async d => {
+    P[d.id] = d.data();
+    try { const x = await getDoc(doc(db, "payments", d.id, "private", "details")); if (x.exists()) dets[d.id] = x.data(); } catch (e) {}
+  }));
+  $("#pl").innerHTML = s.empty ? "<p>Is section mein koi payment nahi</p>" : s.docs.map(d => {
+    const p = d.data(), c = comm(p), pay = Math.round((p.amount - c) * 100) / 100, x = dets[d.id];
+    const ds = p.deliveryStatus === "received" ? "✅ Buyer ne confirm kiya: product mil gaya" : p.deliveryStatus === "not_received" ? "⚠️ Buyer ko product NAHI mila. Nayi date do." : "⏳ Delivery baaki";
     return `<div class="c"><b>${esc(p.adTitle)}</b> — ₹${p.amount}<br>
     <small>Buyer: ${esc(p.buyerName)} → Seller: ${esc(p.sellerName)} • ${dt(p)}</small><br>
     <small>Method: ${esc(p.method)} • ID: <b>${esc(p.ref)}</b></small><br>
     Meri commission (${p.commissionPercent}%): <b>₹${c}</b> • Seller ko dena: <b>₹${pay}</b><br>
     <small>Seller UPI: ${esc(U[p.sellerId]?.upi || "(seller ne UPI nahi diya)")} • Seller mobile: ${esc(U[p.sellerId]?.phone || "-")}</small><br>
-    <small>Buyer mobile: ${esc(U[p.buyerId]?.phone || "-")}</small>
-    ${st === "pending" ? `<br><small>⚠️ Verify se pehle apne UPI app mein dekho: ye ID (${esc(p.ref)}) aur ₹${p.amount} sach mein aaye hain.</small>` : ""}<div style="margin-top:8px">
-    ${st === "pending" ? `<button data-vf="${d.id}" data-ad="${p.adId}">✅ Payment mil gayi (Verify)</button><button class="g" data-rj="${d.id}">❌ Reject</button>` : ""}
-    ${st === "verified" ? `<button data-sd="${d.id}">💸 Seller ko bhej diya</button>` : ""}</div></div>`;
+    ${x ? `<div style="background:#eef0f6;border-radius:8px;padding:8px;margin:6px 0"><b>📦 Buyer ki details</b><br>👤 ${esc(x.name)} • 📱 ${esc(x.phone)}<br>📍 Location: ${esc(x.city)}, ${esc(x.district)}, ${esc(x.state)} - ${esc(x.pin)}<br>🚚 Delivery: ${esc(x.address)}<br>Landmark: ${esc(x.landmark)}${x.gps ? ` • <a href="https://www.google.com/maps?q=${x.gps.lat},${x.gps.lng}" target="_blank">Map</a>` : ""}</div>` : "<small>(Buyer ki details nahi mili)</small><br>"}
+    ${p.deliveryDate ? `<small>📅 Delivery date: <b>${fmtD(p.deliveryDate)}</b> • ${ds}</small><br>` : ""}
+    ${p.status === "pending" ? `<small>⚠️ Verify se pehle apne UPI app mein ye ID (${esc(p.ref)}) aur ₹${p.amount} check karo.</small>` : ""}
+    <div style="margin-top:8px">
+    ${p.status === "pending" ? `<button data-vf="${d.id}">✅ Verify + delivery date</button><button class="g" data-rj="${d.id}">❌ Reject</button>` : ""}
+    ${p.status === "verified" ? `<button data-pay="${d.id}">💸 Seller ko pay karo</button>` : ""}
+    ${(p.status === "verified" || p.status === "settled") && p.deliveryStatus !== "received" ? `<button class="g" data-nd="${d.id}">📅 ${p.deliveryStatus === "not_received" ? "Nayi date do" : "Date badlo"}</button>` : ""}
+    <button class="g" data-cb="${d.id}">💬 Buyer se chat</button><button class="g" data-cs="${d.id}">💬 Seller se chat</button></div></div>`;
   }).join("");
   $("#pl").onclick = async e => {
-    const t = e.target.dataset;
-    if (t.vf) {
-      await updateDoc(doc(db, "payments", t.vf), { status: "verified" });
-      try { await updateDoc(doc(db, "ads", t.ad), { status: "sold" }); } catch (x) {}
-    } else if (t.rj) { if (!confirm("Payment reject karein?")) return; await updateDoc(doc(db, "payments", t.rj), { status: "rejected" }); }
-    else if (t.sd) { if (!confirm("Seller ko paisa bhej diya?")) return; await updateDoc(doc(db, "payments", t.sd), { status: "settled" }); }
-    else return;
+    const t = e.target.dataset, id = t.vf || t.rj || t.pay || t.nd || t.cb || t.cs, p = P[id];
+    if (!id) return;
+    try {
+      if (t.vf) {
+        const d = await askDate("Product buyer ko kab tak milega? (delivery date)"); if (!d) return;
+        await updateDoc(doc(db, "payments", t.vf), { status: "verified", deliveryDate: d, deliveryStatus: "pending", dateHistory: arrayUnion({ date: d, at: Timestamp.now() }) });
+        try { await updateDoc(doc(db, "ads", p.adId), { status: "sold" }); } catch (x) {}
+      } else if (t.rj) { if (!confirm("Payment reject karein?")) return; await updateDoc(doc(db, "payments", t.rj), { status: "rejected" }); }
+      else if (t.pay) { paySellerSheet(t.pay, p, U[p.sellerId], () => payTab(st)); return; }
+      else if (t.nd) {
+        const d = await askDate("Nayi delivery date", p.deliveryDate); if (!d) return;
+        await updateDoc(doc(db, "payments", t.nd), { deliveryDate: d, deliveryStatus: "pending", dateHistory: arrayUnion({ date: d, at: Timestamp.now() }) });
+      }
+      else if (t.cb) { openChatWith(p.buyerId, p.buyerName); return; }
+      else if (t.cs) { openChatWith(p.sellerId, p.sellerName); return; }
+    } catch (x) { alert("Error: " + x.message); return; }
     payTab(st);
   };
 }
